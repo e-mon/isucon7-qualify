@@ -452,14 +452,14 @@ func fetchUnread(c echo.Context) error {
 	resp := []map[string]interface{}{}
 
 	type UnreadCount struct {
-		ch_id int64 `db:"ch_id"`
-		cnt   int64 `db:"cnt"`
+		Chid  int64 `db:"chid"`
+		Cnt   int64 `db:"cnt"`
+		Haveread int64 `db:"haveread"`
 	}
 
 	ucs := []UnreadCount{}
-	query := `select ch_id, cnt from (
-		select
-		   msg.channel_id as ch_id,
+	query := `select
+		   msg.channel_id as chid,
 		   case
 			  when msg.id <= hvr.message_id then 1
 			  else 0
@@ -471,13 +471,16 @@ func fetchUnread(c echo.Context) error {
 			(select user_id, channel_id, message_id from haveread where user_id = ?) hvr
 			on msg.channel_id = hvr.channel_id
 		group by msg.channel_id, haveread
-		having haveread = 0) x`
-	db.Get(&ucs, query, userID)
+		having haveread = 0`
+	err = db.Select(&ucs, query, userID)
+	if err != nil {
+		return err
+	}
 
 	unreadcounts := map[int64]interface{}{}
 
 	for _, uc := range ucs {
-		unreadcounts[uc.ch_id] = uc.cnt
+		unreadcounts[uc.Chid] = uc.Cnt
 	}
 
 	for _, chID := range channels {
@@ -491,32 +494,6 @@ func fetchUnread(c echo.Context) error {
 				"unread":     0})
 		}
 	}
-
-	// for _, chID := range channels {
-	// 	lastID, err := queryHaveRead(userID, chID)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	//
-	// 	var cnt int64{}
-	// 	db.Get(cnt, "SELECT channel_id, COUNT(*) FROM message WHERE user_id = ? GROUP BY channel_id"
-	// 	if lastID > 0 {
-	// 		err = db.Get(&cnt,
-	// 			"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ? AND ? < id",
-	// 			chID, lastID)
-	// 	} else {
-	// 		err = db.Get(&cnt,
-	// 			"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
-	// 			chID)
-	// 	}
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// 	r := map[string]interface{}{
-	// 		"channel_id": chID,
-	// 		"unread":     cnt}
-	// 	resp = append(resp, r)
-	// }
 
 	return c.JSON(http.StatusOK, resp)
 }
@@ -727,7 +704,7 @@ func postProfile(c echo.Context) error {
 func getIcon(c echo.Context) error {
 	var name string
 	var data []byte
-	err := db.QueryRow("SELECT name, data FROM image WHERE name = ?",
+	err := db.QueryRow("SELECT name, data FROM image WHERE name = ? limit 1",
 		c.Param("file_name")).Scan(&name, &data)
 	if err == sql.ErrNoRows {
 		return echo.ErrNotFound
