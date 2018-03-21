@@ -417,15 +417,15 @@ func queryChannels() ([]int64, error) {
 
 func queryHaveRead(userID, chID int64) (int64, error) {
 	type HaveRead struct {
-		UserID    int64     `db:"user_id"`
-		ChannelID int64     `db:"channel_id"`
-		MessageID int64     `db:"message_id"`
-		UpdatedAt time.Time `db:"updated_at"`
-		CreatedAt time.Time `db:"created_at"`
+		// UserID    int64     `db:"user_id"`
+		// ChannelID int64     `db:"channel_id"`
+		MessageID int64 `db:"message_id"`
+		// UpdatedAt time.Time `db:"updated_at"`
+		// CreatedAt time.Time `db:"created_at"`
 	}
 	h := HaveRead{}
 
-	err := db.Get(&h, "SELECT * FROM haveread WHERE user_id = ? AND channel_id = ?",
+	err := db.Get(&h, "SELECT message_id FROM haveread WHERE user_id = ? AND channel_id = ?",
 		userID, chID)
 
 	if err == sql.ErrNoRows {
@@ -442,7 +442,7 @@ func fetchUnread(c echo.Context) error {
 		return c.NoContent(http.StatusForbidden)
 	}
 
-	time.Sleep(time.Second)
+	// time.Sleep(time.Second)
 
 	channels, err := queryChannels()
 	if err != nil {
@@ -451,30 +451,72 @@ func fetchUnread(c echo.Context) error {
 
 	resp := []map[string]interface{}{}
 
-	for _, chID := range channels {
-		lastID, err := queryHaveRead(userID, chID)
-		if err != nil {
-			return err
-		}
-
-		var cnt int64
-		if lastID > 0 {
-			err = db.Get(&cnt,
-				"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ? AND ? < id",
-				chID, lastID)
-		} else {
-			err = db.Get(&cnt,
-				"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
-				chID)
-		}
-		if err != nil {
-			return err
-		}
-		r := map[string]interface{}{
-			"channel_id": chID,
-			"unread":     cnt}
-		resp = append(resp, r)
+	type UnreadCount struct {
+		ch_id int64 `db:"ch_id"`
+		cnt   int64 `db:"cnt"`
 	}
+
+	ucs := []UnreadCount{}
+	query := `select ch_id, cnt from (
+		select
+		   msg.channel_id as ch_id,
+		   case
+			  when msg.id <= hvr.message_id then 1
+			  else 0
+		   end as haveread,
+		   count(*) as cnt
+		from
+		   message msg
+		left outer join 
+			(select user_id, channel_id, message_id from haveread where user_id = ?) hvr
+			on msg.channel_id = hvr.channel_id
+		group by msg.channel_id, haveread
+		having haveread = 0) x`
+	db.Get(&ucs, query, userID)
+
+	unreadcounts := map[int64]interface{}{}
+
+	for _, uc := range ucs {
+		unreadcounts[uc.ch_id] = uc.cnt
+	}
+
+	for _, chID := range channels {
+		if val, ok := unreadcounts[chID]; ok {
+			resp = append(resp, map[string]interface{}{
+				"channel_id": chID,
+				"unread":     val})
+		} else {
+			resp = append(resp, map[string]interface{}{
+				"channel_id": chID,
+				"unread":     0})
+		}
+	}
+
+	// for _, chID := range channels {
+	// 	lastID, err := queryHaveRead(userID, chID)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	//
+	// 	var cnt int64{}
+	// 	db.Get(cnt, "SELECT channel_id, COUNT(*) FROM message WHERE user_id = ? GROUP BY channel_id"
+	// 	if lastID > 0 {
+	// 		err = db.Get(&cnt,
+	// 			"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ? AND ? < id",
+	// 			chID, lastID)
+	// 	} else {
+	// 		err = db.Get(&cnt,
+	// 			"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
+	// 			chID)
+	// 	}
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	r := map[string]interface{}{
+	// 		"channel_id": chID,
+	// 		"unread":     cnt}
+	// 	resp = append(resp, r)
+	// }
 
 	return c.JSON(http.StatusOK, resp)
 }
